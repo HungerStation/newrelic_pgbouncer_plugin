@@ -1,0 +1,60 @@
+#!/usr/bin/env ruby
+
+require 'rubygems'
+require 'bundler/setup'
+require 'newrelic_plugin'
+require 'pg'
+require 'sequel'
+
+module NewrelicPgbouncerPlugin
+  VERSION = '1.0.0'
+
+  class Agent < NewRelic::Plugin::Agent::Base
+
+    agent_guid 'com.hungerstation.newrelic-pgbouncer-plugin'
+    agent_config_options :name, :host, :port, :user, :password
+    agent_version NewrelicPgbouncerPlugin::VERSION
+    agent_human_labels('PgbouncerPlugin') { name }
+
+    attr_reader :ident
+
+    def setup_metrics; end
+
+    def poll_cycle
+      pgbouncer = Pgbouncer.new(host: host, port: port, user: user, pass: password)
+      pools = pgbouncer.pools
+
+      pools.each do |pool|
+        report_metric "Connections/ActiveClients/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:cl_active]
+        report_metric "Connections/WaitingClients/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:cl_waiting]
+        report_metric "Connections/ActiveServers/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:sv_active]
+        report_metric "Connections/IdleServers/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:sv_idle]
+        report_metric "Connections/UsedServers/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:sv_used]
+        report_metric "Connections/TestedServers/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:sv_tested]
+        report_metric "Connections/LoginServers/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:sv_login]
+        report_metric "Connections/MaxWait/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:maxwait]
+        report_metric "Connections/PoolMode/#{pool[:database]}/#{pool[:user]}", 'Count', pool[:pool_mode]
+      end
+
+      pgbouncer.close_connection
+    end
+  end
+
+  class Pgbouncer
+    def initialize(host:, port:, user:, pass:)
+      @db = Sequel.connect("postgres://#{user}:#{pass}@#{host}:#{port}/pgbouncer")
+    end
+
+    def close_connection
+      @db.disconnect
+    end
+
+    def pools
+      @pool_pools ||= @db['show pools;'].to_a
+    end
+  end
+
+  NewRelic::Plugin::Config.config_file = File.dirname(__FILE__) + '/config/newrelic_plugin.yml'
+  NewRelic::Plugin::Setup.install_agent :dbs, self
+  NewRelic::Plugin::Run.setup_and_run
+end
